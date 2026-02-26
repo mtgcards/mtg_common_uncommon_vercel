@@ -125,8 +125,8 @@ export async function fetchCardsForFormat(format: FormatKey): Promise<Serialized
     const minPrice = 4.50;
 
     const [commonCards, uncommonCards] = await Promise.all([
-      fetchAllPages(foilCommonUrl, minPrice, 'usd_foil', true),
-      fetchAllPages(foilUncommonUrl, minPrice, 'usd_foil', true),
+      fetchAllPages(foilCommonUrl, minPrice, 'usd_foil'),
+      fetchAllPages(foilUncommonUrl, minPrice, 'usd_foil'),
     ]);
 
     return [
