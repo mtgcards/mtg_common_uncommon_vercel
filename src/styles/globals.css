@@ -73,6 +73,7 @@ main {
   background: linear-gradient(to bottom, #3d2314, #2b1a0e);
   color: #a08c70;
   border: 1px solid #1a0e05;
+  text-decoration: none;
   border-bottom: none;
   border-radius: 6px 6px 0 0;
   padding: 0rem 1.6rem;

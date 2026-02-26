@@ -59,7 +59,13 @@ async function fetchAllPages(
   const isFoil = priceKey === 'usd_foil';
 
   while (currentUrl) {
-    const response = await fetch(currentUrl);
+    const response = await fetch(currentUrl, { next: { revalidate: 3600 } });
+
+    if (response.status === 429) {
+      await sleep(60000);
+      continue;
+    }
+
     if (!response.ok) {
       let detail = `HTTP ${response.status}`;
       try {
