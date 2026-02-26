@@ -1,6 +1,7 @@
 'use client';
 
 import { SerializedCard, Currency, Shop, ExchangeRates } from '@/lib/types';
+import { getSetSectionId } from '@/lib/utils';
 import CardItem from './CardItem';
 
 interface SetSectionProps {
@@ -24,7 +25,7 @@ export default function SetSection({
 }: SetSectionProps) {
   const year = releasedAt ? releasedAt.substring(0, 4) + '年' : '';
   const label = setName + (year ? ` (${year})` : '');
-  const sectionId = 'set-' + setName.replace(/[^A-Za-z0-9]/g, '_');
+  const sectionId = getSetSectionId(setName);
 
   return (
     <section className="set-section" id={sectionId}>

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { ALL_FORMAT_KEYS, TAB_LABELS } from '@/lib/constants';
+import { ALL_FORMAT_KEYS, TAB_LABELS, DEFAULT_FORMAT } from '@/lib/constants';
 import { FormatKey } from '@/lib/types';
 
 interface TabBarProps {
@@ -12,7 +12,7 @@ export default function TabBar({ activeFormat }: TabBarProps) {
   return (
     <nav className="tab-bar" role="tablist">
       {ALL_FORMAT_KEYS.map((key) => {
-        const href = key === 'y1993_2003' ? '/' : `/${key}`;
+        const href = key === DEFAULT_FORMAT ? '/' : `/${key}`;
         return (
           <Link
             key={key}

@@ -2,8 +2,10 @@
 
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { SerializedCard, FormatKey, Currency, Shop, ExchangeRates } from '@/lib/types';
-import { ThresholdKey } from '@/lib/constants';
-import ThresholdBar, { filterCardsByThreshold } from './ThresholdBar';
+import { THRESHOLD_OPTIONS, ThresholdKey } from '@/lib/constants';
+import { fetchExchangeRates } from '@/lib/exchange';
+import { getSetSectionId, filterCardsByThreshold } from '@/lib/utils';
+import ThresholdBar from './ThresholdBar';
 import SetSection from './SetSection';
 import BackToTop from './BackToTop';
 
@@ -39,14 +41,11 @@ function groupBySet(cards: SerializedCard[]): SetGroup[] {
 }
 
 function getDefaultThresholds(): Record<ThresholdKey, number> {
-  return {
-    common: 0.80,
-    uncommon: 2.00,
-    basicLand: 2.50,
-    token: 2.50,
-    foilCommon: 10.00,
-    foilUncommon: 10.00,
-  };
+  const result = {} as Record<ThresholdKey, number>;
+  for (const key of Object.keys(THRESHOLD_OPTIONS) as ThresholdKey[]) {
+    result[key] = THRESHOLD_OPTIONS[key].default;
+  }
+  return result;
 }
 
 export default function CardGrid({ cards, format }: CardGridProps) {
@@ -56,15 +55,7 @@ export default function CardGrid({ cards, format }: CardGridProps) {
   const [exchangeRates, setExchangeRates] = useState<ExchangeRates>({ JPY: null, EUR: null });
 
   useEffect(() => {
-    fetch('https://api.frankfurter.app/latest?from=USD&to=JPY,EUR')
-      .then((res) => res.json())
-      .then((data) => {
-        setExchangeRates({
-          JPY: data.rates?.JPY ?? null,
-          EUR: data.rates?.EUR ?? null,
-        });
-      })
-      .catch(() => {});
+    fetchExchangeRates().then(setExchangeRates);
   }, []);
 
   const handleFilterChange = useCallback((next: Record<ThresholdKey, number>) => {
@@ -89,7 +80,7 @@ export default function CardGrid({ cards, format }: CardGridProps) {
   const setNavLinks = useMemo(
     () =>
       setGroups.map((g) => ({
-        id: 'set-' + g.setName.replace(/[^A-Za-z0-9]/g, '_'),
+        id: getSetSectionId(g.setName),
         setName: g.setName,
         setCode: g.setCode,
       })),

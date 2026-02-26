@@ -8,7 +8,7 @@ import {
   THRESHOLD_LABELS,
   ThresholdKey,
 } from '@/lib/constants';
-import { FormatKey, Currency, Shop, SerializedCard } from '@/lib/types';
+import { FormatKey, Currency, Shop } from '@/lib/types';
 
 interface ThresholdBarProps {
   format: FormatKey;
@@ -81,29 +81,4 @@ export default function ThresholdBar({
       </label>
     </div>
   );
-}
-
-export function filterCardsByThreshold(
-  cards: SerializedCard[],
-  format: FormatKey,
-  thresholds: Record<ThresholdKey, number>,
-): SerializedCard[] {
-  return cards.filter((card) => {
-    if (format === 'foil') {
-      const minPrice = card.rarity === 'common'
-        ? thresholds.foilCommon
-        : thresholds.foilUncommon;
-      const price = card.priceUsdFoil ?? card.priceEurFoil;
-      return price !== null && price >= minPrice;
-    }
-    if (format === 'basic_land') {
-      return card.priceUsd !== null && card.priceUsd >= thresholds.basicLand;
-    }
-    if (format === 'token') {
-      return card.priceUsd !== null && card.priceUsd >= thresholds.token;
-    }
-    // Year-based: common/uncommon
-    const minPrice = card.rarity === 'common' ? thresholds.common : thresholds.uncommon;
-    return card.priceUsd !== null && card.priceUsd >= minPrice;
-  });
 }

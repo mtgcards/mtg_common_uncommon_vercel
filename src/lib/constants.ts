@@ -1,5 +1,9 @@
 import { FormatKey } from './types';
 
+export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://mtg-common-uncommon-vercel.vercel.app';
+export const DEFAULT_FORMAT: FormatKey = 'y1993_2003';
+export const SITE_NAME = 'MTG 高額コモン・アンコモン一覧';
+
 export const API_BASE = 'https://api.scryfall.com/cards/search';
 
 export const QUERY_FILTERS =

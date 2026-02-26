@@ -1,15 +1,13 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { fetchCardsForFormat } from '@/lib/scryfall';
-import { ALL_FORMAT_KEYS, TAB_LABELS } from '@/lib/constants';
+import { ALL_FORMAT_KEYS, TAB_LABELS, SITE_URL, DEFAULT_FORMAT } from '@/lib/constants';
 import { FormatKey } from '@/lib/types';
 import TabBar from '@/components/TabBar';
 import CardGrid from '@/components/CardGrid';
 import { BreadcrumbJsonLd } from '@/components/JsonLd';
 
 export const revalidate = 3600;
-
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://mtg-common-uncommon-vercel.vercel.app';
 
 const FORMAT_DESCRIPTIONS: Record<FormatKey, string> = {
   y1993_2003: '1995〜2003年発売のMTGセットから、$0.80以上のコモン・$2.00以上のアンコモンを年代別・セット別に一覧表示します。',
@@ -25,7 +23,7 @@ const FORMAT_DESCRIPTIONS: Record<FormatKey, string> = {
 
 export function generateStaticParams() {
   return ALL_FORMAT_KEYS
-    .filter((key) => key !== 'y1993_2003')
+    .filter((key) => key !== DEFAULT_FORMAT)
     .map((format) => ({ format }));
 }
 
@@ -43,7 +41,7 @@ export async function generateMetadata({ params }: FormatPageProps): Promise<Met
 
   const label = TAB_LABELS[formatKey];
   const description = FORMAT_DESCRIPTIONS[formatKey];
-  const pageUrl = `${siteUrl}/${format}`;
+  const pageUrl = `${SITE_URL}/${format}`;
 
   return {
     title: `${label} | MTG 高額コモン・アンコモン一覧`,
@@ -73,7 +71,7 @@ export default async function FormatPage({ params }: FormatPageProps) {
     notFound();
   }
 
-  if (format === 'y1993_2003') {
+  if (format === DEFAULT_FORMAT) {
     const { redirect } = await import('next/navigation');
     redirect('/');
   }
@@ -81,13 +79,13 @@ export default async function FormatPage({ params }: FormatPageProps) {
   const cards = await fetchCardsForFormat(format as FormatKey);
   const formatKey = format as FormatKey;
   const label = TAB_LABELS[formatKey];
-  const pageUrl = `${siteUrl}/${format}`;
+  const pageUrl = `${SITE_URL}/${format}`;
 
   return (
     <main>
       <BreadcrumbJsonLd
         items={[
-          { name: 'ホーム', url: siteUrl },
+          { name: 'ホーム', url: SITE_URL },
           { name: label, url: pageUrl },
         ]}
       />

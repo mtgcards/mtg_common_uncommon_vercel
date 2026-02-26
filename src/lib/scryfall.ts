@@ -2,7 +2,7 @@ import { Readable } from 'node:stream';
 import { chain } from 'stream-chain';
 import { parser } from 'stream-json';
 import { streamArray } from 'stream-json/streamers/StreamArray';
-import { SerializedCard, FormatKey } from './types';
+import { SerializedCard, FormatKey, BulkCard } from './types';
 import { EXCLUDED_SETS, EXCLUDED_PREFIXES } from './constants';
 
 // Set codes excluded via Scryfall query filters
@@ -20,35 +20,6 @@ const DATE_RANGES: Record<string, { start: string; end?: string }> = {
   y2023_2025: { start: '2023-01-01', end: '2025-12-31' },
   y2026_: { start: '2026-01-01' },
 };
-
-interface BulkCard {
-  name: string;
-  set: string;
-  set_name: string;
-  rarity: string;
-  released_at: string;
-  type_line: string;
-  layout: string;
-  border_color: string;
-  prices: {
-    usd: string | null;
-    usd_foil: string | null;
-    eur: string | null;
-    eur_foil: string | null;
-  };
-  image_uris?: {
-    normal: string;
-    small: string;
-    large: string;
-  };
-  card_faces?: Array<{
-    image_uris?: {
-      normal: string;
-      small: string;
-      large: string;
-    };
-  }>;
-}
 
 // --- Filter helpers ---
 

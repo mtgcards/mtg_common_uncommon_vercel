@@ -1,38 +1,3 @@
-export interface ScryfallCard {
-  name: string;
-  set: string;
-  set_name: string;
-  rarity: string;
-  released_at: string;
-  prices: {
-    usd: string | null;
-    usd_foil: string | null;
-    eur: string | null;
-    eur_foil: string | null;
-    _rawFoilUsd?: number;
-    _rawFoilEur?: number;
-  };
-  image_uris?: {
-    normal: string;
-    small: string;
-    large: string;
-  };
-  card_faces?: Array<{
-    image_uris?: {
-      normal: string;
-      small: string;
-      large: string;
-    };
-  }>;
-}
-
-export interface ScryfallResponse {
-  data: ScryfallCard[];
-  has_more: boolean;
-  next_page?: string;
-  total_cards?: number;
-}
-
 export interface ExchangeRates {
   JPY: number | null;
   EUR: number | null;
@@ -63,4 +28,33 @@ export interface SerializedCard {
   priceUsd: number | null;
   priceUsdFoil: number | null;
   priceEurFoil: number | null;
+}
+
+export interface BulkCard {
+  name: string;
+  set: string;
+  set_name: string;
+  rarity: string;
+  released_at: string;
+  type_line: string;
+  layout: string;
+  border_color: string;
+  prices: {
+    usd: string | null;
+    usd_foil: string | null;
+    eur: string | null;
+    eur_foil: string | null;
+  };
+  image_uris?: {
+    normal: string;
+    small: string;
+    large: string;
+  };
+  card_faces?: Array<{
+    image_uris?: {
+      normal: string;
+      small: string;
+      large: string;
+    };
+  }>;
 }
