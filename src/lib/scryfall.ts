@@ -1,29 +1,115 @@
-import { ScryfallCard, ScryfallResponse, SerializedCard, FormatKey } from './types';
-import {
-  API_BASE, QUERY_FILTERS, SET_FILTERS, QUERY_SUFFIX,
-  FORMATS, RATE_LIMIT_DELAY, EXCLUDED_SETS, EXCLUDED_PREFIXES,
-} from './constants';
+import { SerializedCard, FormatKey } from './types';
+import { EXCLUDED_SETS, EXCLUDED_PREFIXES } from './constants';
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+// Set codes excluded via Scryfall query filters
+const EXCLUDED_SET_CODES = new Set([
+  'lea', 'leb', 'unk', '30a', 'ced', 'cei', 'ptc',
+  'sld', 'slp', 'slc', 'slu', 'pssc',
+]);
+
+// Date ranges for year-based formats
+const DATE_RANGES: Partial<Record<FormatKey, { start: string; end?: string }>> = {
+  y1993_2003: { start: '1995-01-01', end: '2003-12-31' },
+  y2004_2014: { start: '2004-01-01', end: '2014-12-31' },
+  y2015_2020: { start: '2015-01-01', end: '2020-12-31' },
+  y2021_2022: { start: '2021-01-01', end: '2022-12-31' },
+  y2023_2025: { start: '2023-01-01', end: '2025-12-31' },
+  y2026_: { start: '2026-01-01' },
+};
+
+interface BulkCard {
+  name: string;
+  set: string;
+  set_name: string;
+  rarity: string;
+  released_at: string;
+  type_line: string;
+  layout: string;
+  border_color: string;
+  prices: {
+    usd: string | null;
+    usd_foil: string | null;
+    eur: string | null;
+    eur_foil: string | null;
+  };
+  image_uris?: {
+    normal: string;
+    small: string;
+    large: string;
+  };
+  card_faces?: Array<{
+    image_uris?: {
+      normal: string;
+      small: string;
+      large: string;
+    };
+  }>;
 }
 
-function getImageUrl(card: ScryfallCard): string | null {
+// Module-level cache (persists across pages during a single build process)
+let cachedBulkCards: BulkCard[] | null = null;
+
+async function getBulkCards(): Promise<BulkCard[]> {
+  if (cachedBulkCards) return cachedBulkCards;
+
+  const metaRes = await fetch('https://api.scryfall.com/bulk-data/default-cards');
+  if (!metaRes.ok) throw new Error(`Bulk data metadata fetch failed: HTTP ${metaRes.status}`);
+  const meta = await metaRes.json();
+
+  const dataRes = await fetch(meta.download_uri);
+  if (!dataRes.ok) throw new Error(`Bulk data download failed: HTTP ${dataRes.status}`);
+  cachedBulkCards = await dataRes.json();
+
+  return cachedBulkCards!;
+}
+
+// --- Filter helpers ---
+
+function isExcludedSet(card: BulkCard): boolean {
+  if (EXCLUDED_SET_CODES.has(card.set)) return true;
+  if (EXCLUDED_SETS.includes(card.set_name)) return true;
+  return EXCLUDED_PREFIXES.some((p) => card.set_name.startsWith(p));
+}
+
+function isGoldBorder(card: BulkCard): boolean {
+  return card.border_color === 'gold';
+}
+
+function isBasicType(card: BulkCard): boolean {
+  return card.type_line?.toLowerCase().includes('basic') ?? false;
+}
+
+function isTokenCard(card: BulkCard): boolean {
+  return card.layout === 'token';
+}
+
+function isEmblemType(card: BulkCard): boolean {
+  return card.type_line?.toLowerCase().includes('emblem') ?? false;
+}
+
+function baseExclude(card: BulkCard): boolean {
+  return !isExcludedSet(card) && !isGoldBorder(card) && !isBasicType(card) && !isTokenCard(card) && !isEmblemType(card);
+}
+
+function getUsdPrice(card: BulkCard): number | null {
+  return card.prices.usd ? parseFloat(card.prices.usd) : null;
+}
+
+function getFoilPrice(card: BulkCard): number | null {
+  if (card.prices.usd_foil) return parseFloat(card.prices.usd_foil);
+  if (card.prices.eur_foil) return parseFloat(card.prices.eur_foil);
+  return null;
+}
+
+// --- Serialization ---
+
+function getImageUrl(card: BulkCard): string | null {
   if (card.image_uris?.normal) return card.image_uris.normal;
   if (card.card_faces?.[0]?.image_uris?.normal) return card.card_faces[0].image_uris.normal;
   return null;
 }
 
-function isExcluded(card: ScryfallCard): boolean {
-  if (EXCLUDED_SETS.includes(card.set_name)) return true;
-  return EXCLUDED_PREFIXES.some((p) => card.set_name.startsWith(p));
-}
-
-function buildUrl(format: string, rarity: string): string {
-  return `${API_BASE}?q=r%3A${rarity}${QUERY_FILTERS}+${FORMATS[format]}${QUERY_SUFFIX}`;
-}
-
-function serializeCard(card: ScryfallCard, isFoil: boolean): SerializedCard {
+function serializeCard(card: BulkCard, isFoil: boolean): SerializedCard {
   let priceUsdFoil: number | null = null;
   let priceEurFoil: number | null = null;
 
@@ -48,86 +134,48 @@ function serializeCard(card: ScryfallCard, isFoil: boolean): SerializedCard {
   };
 }
 
-async function fetchAllPages(
-  url: string,
-  minPrice: number,
-  priceKey: 'usd' | 'usd_foil' = 'usd',
-  noEarlyStop = false,
-): Promise<ScryfallCard[]> {
-  const allFiltered: ScryfallCard[] = [];
-  let currentUrl: string | null = url;
-  const isFoil = priceKey === 'usd_foil';
-
-  while (currentUrl) {
-    const response = await fetch(currentUrl, { next: { revalidate: 3600 } });
-
-    if (response.status === 429) {
-      await sleep(60000);
-      continue;
-    }
-
-    if (!response.ok) {
-      let detail = `HTTP ${response.status}`;
-      try {
-        const errData = await response.json();
-        if (errData?.details) detail = errData.details;
-      } catch { /* ignore */ }
-      throw new Error(detail);
-    }
-
-    const data: ScryfallResponse = await response.json();
-    const cards = data.data || [];
-
-    const filtered = cards.filter((card) => {
-      let price = card.prices[priceKey];
-      if (!price && isFoil) price = card.prices.eur_foil;
-      if (!price || parseFloat(price) < minPrice) return false;
-      return !isExcluded(card);
-    });
-
-    allFiltered.push(...filtered);
-
-    const reachedLimit = !noEarlyStop && cards.some((card) => {
-      const price = card.prices[priceKey];
-      if (isFoil) return !price || parseFloat(price!) < minPrice;
-      return price !== null && price !== undefined && parseFloat(price) < minPrice;
-    });
-
-    if (!reachedLimit && data.has_more && data.next_page) {
-      await sleep(RATE_LIMIT_DELAY);
-      currentUrl = data.next_page;
-    } else {
-      currentUrl = null;
-    }
-  }
-
-  return allFiltered;
-}
+// --- Main export ---
 
 export async function fetchCardsForFormat(format: FormatKey): Promise<SerializedCard[]> {
+  const allCards = await getBulkCards();
+
   if (format === 'basic_land') {
-    const url = `${API_BASE}?q=t%3Abasic${SET_FILTERS}${QUERY_SUFFIX}`;
     const minPrice = 2.50;
-    const cards = await fetchAllPages(url, minPrice);
-    return cards.map((c) => serializeCard(c, false));
+    return allCards
+      .filter((card) => {
+        const price = getUsdPrice(card);
+        return isBasicType(card) && !isExcludedSet(card) && !isGoldBorder(card) && price !== null && price >= minPrice;
+      })
+      .sort((a, b) => getUsdPrice(b)! - getUsdPrice(a)!)
+      .map((c) => serializeCard(c, false));
   }
 
   if (format === 'token') {
-    const url = `${API_BASE}?q=%28is%3Atoken+OR+t%3Aemblem%29${SET_FILTERS}${QUERY_SUFFIX}`;
     const minPrice = 2.50;
-    const cards = await fetchAllPages(url, minPrice);
-    return cards.map((c) => serializeCard(c, false));
+    return allCards
+      .filter((card) => {
+        const price = getUsdPrice(card);
+        return (
+          (isTokenCard(card) || isEmblemType(card)) &&
+          !isExcludedSet(card) &&
+          !isGoldBorder(card) &&
+          price !== null &&
+          price >= minPrice
+        );
+      })
+      .sort((a, b) => getUsdPrice(b)! - getUsdPrice(a)!)
+      .map((c) => serializeCard(c, false));
   }
 
   if (format === 'foil') {
-    const foilCommonUrl = `${API_BASE}?q=is%3Afoil+r%3Acommon${QUERY_FILTERS}&order=usd&dir=desc&unique=prints`;
-    const foilUncommonUrl = `${API_BASE}?q=is%3Afoil+r%3Auncommon${QUERY_FILTERS}&order=usd&dir=desc&unique=prints`;
     const minPrice = 4.50;
+    const foilFilter = (rarity: string) => (card: BulkCard) => {
+      const price = getFoilPrice(card);
+      return card.rarity === rarity && baseExclude(card) && price !== null && price >= minPrice;
+    };
 
-    const [commonCards, uncommonCards] = await Promise.all([
-      fetchAllPages(foilCommonUrl, minPrice, 'usd_foil'),
-      fetchAllPages(foilUncommonUrl, minPrice, 'usd_foil'),
-    ]);
+    const commonCards = allCards.filter(foilFilter('common'));
+    const uncommonCards = allCards.filter(foilFilter('uncommon'));
 
     return [
       ...commonCards.map((c) => serializeCard(c, true)),
@@ -135,15 +183,35 @@ export async function fetchCardsForFormat(format: FormatKey): Promise<Serialized
     ];
   }
 
-  // Year-based format: fetch common + uncommon
-  const commonUrl = buildUrl(format, 'common');
-  const uncommonUrl = buildUrl(format, 'uncommon');
+  // Year-based format
+  const dateRange = DATE_RANGES[format];
+  if (!dateRange) throw new Error(`Unknown format: ${format}`);
+
   const commonMinPrice = 0.80;
   const uncommonMinPrice = 2.00;
 
-  const commonCards = await fetchAllPages(commonUrl, commonMinPrice);
-  await sleep(RATE_LIMIT_DELAY);
-  const uncommonCards = await fetchAllPages(uncommonUrl, uncommonMinPrice);
+  const inDateRange = (card: BulkCard) => {
+    const date = card.released_at;
+    if (!date || date < dateRange.start) return false;
+    if (dateRange.end && date > dateRange.end) return false;
+    return true;
+  };
+
+  const yearFilter = (card: BulkCard) => inDateRange(card) && baseExclude(card);
+
+  const commonCards = allCards
+    .filter((card) => {
+      const price = getUsdPrice(card);
+      return card.rarity === 'common' && yearFilter(card) && price !== null && price >= commonMinPrice;
+    })
+    .sort((a, b) => getUsdPrice(b)! - getUsdPrice(a)!);
+
+  const uncommonCards = allCards
+    .filter((card) => {
+      const price = getUsdPrice(card);
+      return card.rarity === 'uncommon' && yearFilter(card) && price !== null && price >= uncommonMinPrice;
+    })
+    .sort((a, b) => getUsdPrice(b)! - getUsdPrice(a)!);
 
   return [
     ...commonCards.map((c) => serializeCard(c, false)),
