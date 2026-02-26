@@ -1,3 +1,7 @@
+import { Readable } from 'node:stream';
+import { chain } from 'stream-chain';
+import { parser } from 'stream-json';
+import { streamArray } from 'stream-json/streamers/StreamArray';
 import { SerializedCard, FormatKey } from './types';
 import { EXCLUDED_SETS, EXCLUDED_PREFIXES } from './constants';
 
@@ -8,7 +12,7 @@ const EXCLUDED_SET_CODES = new Set([
 ]);
 
 // Date ranges for year-based formats
-const DATE_RANGES: Partial<Record<FormatKey, { start: string; end?: string }>> = {
+const DATE_RANGES: Record<string, { start: string; end?: string }> = {
   y1993_2003: { start: '1995-01-01', end: '2003-12-31' },
   y2004_2014: { start: '2004-01-01', end: '2014-12-31' },
   y2015_2020: { start: '2015-01-01', end: '2020-12-31' },
@@ -46,23 +50,6 @@ interface BulkCard {
   }>;
 }
 
-// Module-level cache (persists across pages during a single build process)
-let cachedBulkCards: BulkCard[] | null = null;
-
-async function getBulkCards(): Promise<BulkCard[]> {
-  if (cachedBulkCards) return cachedBulkCards;
-
-  const metaRes = await fetch('https://api.scryfall.com/bulk-data/default-cards');
-  if (!metaRes.ok) throw new Error(`Bulk data metadata fetch failed: HTTP ${metaRes.status}`);
-  const meta = await metaRes.json();
-
-  const dataRes = await fetch(meta.download_uri);
-  if (!dataRes.ok) throw new Error(`Bulk data download failed: HTTP ${dataRes.status}`);
-  cachedBulkCards = await dataRes.json();
-
-  return cachedBulkCards!;
-}
-
 // --- Filter helpers ---
 
 function isExcludedSet(card: BulkCard): boolean {
@@ -85,10 +72,6 @@ function isTokenCard(card: BulkCard): boolean {
 
 function isEmblemType(card: BulkCard): boolean {
   return card.type_line?.toLowerCase().includes('emblem') ?? false;
-}
-
-function baseExclude(card: BulkCard): boolean {
-  return !isExcludedSet(card) && !isGoldBorder(card) && !isBasicType(card) && !isTokenCard(card) && !isEmblemType(card);
 }
 
 function getUsdPrice(card: BulkCard): number | null {
@@ -134,87 +117,114 @@ function serializeCard(card: BulkCard, isFoil: boolean): SerializedCard {
   };
 }
 
+// --- Streaming bulk data ---
+
+function pushToBucket(buckets: Map<string, BulkCard[]>, key: string, card: BulkCard) {
+  let bucket = buckets.get(key);
+  if (!bucket) {
+    bucket = [];
+    buckets.set(key, bucket);
+  }
+  bucket.push(card);
+}
+
+function categorizeCard(card: BulkCard, buckets: Map<string, BulkCard[]>) {
+  if (isExcludedSet(card) || isGoldBorder(card)) return;
+
+  // Basic land → basic_land bucket only
+  if (isBasicType(card)) {
+    const price = getUsdPrice(card);
+    if (price !== null && price >= 2.50) {
+      pushToBucket(buckets, 'basic_land', card);
+    }
+    return;
+  }
+
+  // Token / Emblem → token bucket only
+  if (isTokenCard(card) || isEmblemType(card)) {
+    const price = getUsdPrice(card);
+    if (price !== null && price >= 2.50) {
+      pushToBucket(buckets, 'token', card);
+    }
+    return;
+  }
+
+  // Only common/uncommon from here
+  if (card.rarity !== 'common' && card.rarity !== 'uncommon') return;
+
+  // Year-based formats
+  const usdPrice = getUsdPrice(card);
+  if (usdPrice !== null && card.released_at) {
+    const minPrice = card.rarity === 'common' ? 0.80 : 2.00;
+    if (usdPrice >= minPrice) {
+      for (const [format, range] of Object.entries(DATE_RANGES)) {
+        if (card.released_at < range.start) continue;
+        if (range.end && card.released_at > range.end) continue;
+        pushToBucket(buckets, format, card);
+        break;
+      }
+    }
+  }
+
+  // Foil format
+  const foilPrice = getFoilPrice(card);
+  if (foilPrice !== null && foilPrice >= 4.50) {
+    pushToBucket(buckets, 'foil', card);
+  }
+}
+
+let cachedResults: Map<string, SerializedCard[]> | null = null;
+
+async function loadBulkData(): Promise<Map<string, SerializedCard[]>> {
+  if (cachedResults) return cachedResults;
+
+  const metaRes = await fetch('https://api.scryfall.com/bulk-data/default-cards');
+  if (!metaRes.ok) throw new Error(`Bulk data metadata: HTTP ${metaRes.status}`);
+  const meta = await metaRes.json();
+
+  const dataRes = await fetch(meta.download_uri);
+  if (!dataRes.ok) throw new Error(`Bulk data download: HTTP ${dataRes.status}`);
+
+  // Stream-parse: process each card one-by-one without loading full JSON into memory
+  const buckets = new Map<string, BulkCard[]>();
+
+  const pipeline = chain([
+    Readable.fromWeb(dataRes.body! as never),
+    parser(),
+    streamArray(),
+  ]);
+
+  for await (const { value } of pipeline as AsyncIterable<{ key: number; value: unknown }>) {
+    categorizeCard(value as BulkCard, buckets);
+  }
+
+  // Sort and serialize each bucket
+  const results = new Map<string, SerializedCard[]>();
+
+  for (const [format, cards] of buckets) {
+    const isFoil = format === 'foil';
+    const priceGetter = isFoil ? getFoilPrice : getUsdPrice;
+
+    if (format === 'basic_land' || format === 'token') {
+      cards.sort((a, b) => (priceGetter(b) ?? 0) - (priceGetter(a) ?? 0));
+    } else {
+      // Common first (price desc), then uncommon (price desc)
+      cards.sort((a, b) => {
+        if (a.rarity !== b.rarity) return a.rarity === 'common' ? -1 : 1;
+        return (priceGetter(b) ?? 0) - (priceGetter(a) ?? 0);
+      });
+    }
+
+    results.set(format, cards.map((c) => serializeCard(c, isFoil)));
+  }
+
+  cachedResults = results;
+  return results;
+}
+
 // --- Main export ---
 
 export async function fetchCardsForFormat(format: FormatKey): Promise<SerializedCard[]> {
-  const allCards = await getBulkCards();
-
-  if (format === 'basic_land') {
-    const minPrice = 2.50;
-    return allCards
-      .filter((card) => {
-        const price = getUsdPrice(card);
-        return isBasicType(card) && !isExcludedSet(card) && !isGoldBorder(card) && price !== null && price >= minPrice;
-      })
-      .sort((a, b) => getUsdPrice(b)! - getUsdPrice(a)!)
-      .map((c) => serializeCard(c, false));
-  }
-
-  if (format === 'token') {
-    const minPrice = 2.50;
-    return allCards
-      .filter((card) => {
-        const price = getUsdPrice(card);
-        return (
-          (isTokenCard(card) || isEmblemType(card)) &&
-          !isExcludedSet(card) &&
-          !isGoldBorder(card) &&
-          price !== null &&
-          price >= minPrice
-        );
-      })
-      .sort((a, b) => getUsdPrice(b)! - getUsdPrice(a)!)
-      .map((c) => serializeCard(c, false));
-  }
-
-  if (format === 'foil') {
-    const minPrice = 4.50;
-    const foilFilter = (rarity: string) => (card: BulkCard) => {
-      const price = getFoilPrice(card);
-      return card.rarity === rarity && baseExclude(card) && price !== null && price >= minPrice;
-    };
-
-    const commonCards = allCards.filter(foilFilter('common'));
-    const uncommonCards = allCards.filter(foilFilter('uncommon'));
-
-    return [
-      ...commonCards.map((c) => serializeCard(c, true)),
-      ...uncommonCards.map((c) => serializeCard(c, true)),
-    ];
-  }
-
-  // Year-based format
-  const dateRange = DATE_RANGES[format];
-  if (!dateRange) throw new Error(`Unknown format: ${format}`);
-
-  const commonMinPrice = 0.80;
-  const uncommonMinPrice = 2.00;
-
-  const inDateRange = (card: BulkCard) => {
-    const date = card.released_at;
-    if (!date || date < dateRange.start) return false;
-    if (dateRange.end && date > dateRange.end) return false;
-    return true;
-  };
-
-  const yearFilter = (card: BulkCard) => inDateRange(card) && baseExclude(card);
-
-  const commonCards = allCards
-    .filter((card) => {
-      const price = getUsdPrice(card);
-      return card.rarity === 'common' && yearFilter(card) && price !== null && price >= commonMinPrice;
-    })
-    .sort((a, b) => getUsdPrice(b)! - getUsdPrice(a)!);
-
-  const uncommonCards = allCards
-    .filter((card) => {
-      const price = getUsdPrice(card);
-      return card.rarity === 'uncommon' && yearFilter(card) && price !== null && price >= uncommonMinPrice;
-    })
-    .sort((a, b) => getUsdPrice(b)! - getUsdPrice(a)!);
-
-  return [
-    ...commonCards.map((c) => serializeCard(c, false)),
-    ...uncommonCards.map((c) => serializeCard(c, false)),
-  ];
+  const results = await loadBulkData();
+  return results.get(format) ?? [];
 }
